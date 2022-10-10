@@ -3,12 +3,19 @@ package com.example.core.communication
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGatt.GATT_SUCCESS
-import android.bluetooth.BluetoothGatt.STATE_CONNECTED
-import android.bluetooth.BluetoothGatt.STATE_DISCONNECTED
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattService
 import android.content.Context
 import androidx.annotation.RequiresPermission
+import com.example.core.communication.GattEvent.CharacteristicChanged
+import com.example.core.communication.GattEvent.CharacteristicRead
+import com.example.core.communication.GattEvent.CharacteristicWrite
+import com.example.core.communication.GattEvent.ConnectionStateChange
+import com.example.core.communication.GattEvent.ServiceChanged
+import com.example.core.communication.GattEvent.ServicesDiscovered
+import com.example.core.communication.GattResult.Complete
+import com.example.core.communication.GattResult.RequestFailedToStart
+import com.example.core.communication.GattResult.Timeout
 import com.example.core.util.withRetries
 import com.example.core.util.withTimeoutOrDefault
 import kotlinx.coroutines.CoroutineDispatcher
@@ -16,12 +23,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
-import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
@@ -50,7 +57,7 @@ class SimpleBluetoothGatt(
      * [serviceChangedEvents] emits.
      */
     val servicesDiscovered: Flow<List<BluetoothGattService>> = gattCallback.events
-        .filter { it is GattEvent.ServicesDiscovered }
+        .filter { it is ServicesDiscovered }
         .map { gatt.services.filterNotNull() }
         .stateIn(
             scope = scope,
@@ -63,7 +70,7 @@ class SimpleBluetoothGatt(
      * [discoverServices] should be called to synchronize [servicesDiscovered] with the device.
      */
     val serviceChangedEvents: Flow<Unit> = gattCallback.events
-        .filter { it is GattEvent.ServiceChanged }
+        .filter { it is ServiceChanged }
         .map {}
 
     /**
@@ -74,18 +81,15 @@ class SimpleBluetoothGatt(
     suspend fun discoverServices(
         retries: Int = DEFAULT_RETRIES,
         attemptTimeoutMillis: Long = DEFAULT_ATTEMPT_TIMEOUT
-    ): GattResult<GattEvent.ServicesDiscovered> {
+    ): GattResult<ServicesDiscovered> {
         return mutex.queueGattOperation(
             attemptTimeoutMillis = attemptTimeoutMillis,
             retries = retries,
-            retryIf = { (it as? GattResult.Complete)?.response?.status != GATT_SUCCESS }
+            retryIf = { it.status != GATT_SUCCESS }
         ) {
-            gattCallback.events
-                .mapNotNull { it as? GattEvent.ServicesDiscovered }
-                .toGattResult()
-                .shareIn(scope = scope, started = SharingStarted.Eagerly)
+            getGattEvents<ServicesDiscovered>()
                 .onSubscription {
-                    if (!gatt.discoverServices()) emit(GattResult.RequestFailedToStart)
+                    if (!gatt.discoverServices()) emit(RequestFailedToStart)
                 }
                 .first()
         }
@@ -99,22 +103,19 @@ class SimpleBluetoothGatt(
         characteristic: BluetoothGattCharacteristic,
         retries: Int = DEFAULT_RETRIES,
         attemptTimeoutMillis: Long = DEFAULT_ATTEMPT_TIMEOUT
-    ): GattResult<GattEvent.CharacteristicWrite> {
+    ): GattResult<CharacteristicWrite> {
         return mutex.queueGattOperation(
             attemptTimeoutMillis = attemptTimeoutMillis,
             retries = retries,
-            retryIf = { (it as? GattResult.Complete)?.response?.status != GATT_SUCCESS }
+            retryIf = { it.status != GATT_SUCCESS }
         ) {
-            gattCallback.events
-                .mapNotNull { it as? GattEvent.CharacteristicWrite }
-                .filter { it.characteristic?.uuid == characteristic.uuid }
-                .toGattResult()
-                .shareIn(scope = scope, started = SharingStarted.Eagerly)
+            getGattEvents<CharacteristicWrite>()
                 .onSubscription {
                     if (!gatt.writeCharacteristic(characteristic)) {
-                        emit(GattResult.RequestFailedToStart)
+                        emit(RequestFailedToStart)
                     }
                 }
+                .filterGattResponse { it.characteristic?.uuid == characteristic.uuid }
                 .first()
         }
     }
@@ -127,22 +128,19 @@ class SimpleBluetoothGatt(
         characteristic: BluetoothGattCharacteristic,
         retries: Int = DEFAULT_RETRIES,
         attemptTimeoutMillis: Long = DEFAULT_ATTEMPT_TIMEOUT
-    ): GattResult<GattEvent.CharacteristicRead> {
+    ): GattResult<CharacteristicRead> {
         return mutex.queueGattOperation(
             attemptTimeoutMillis = attemptTimeoutMillis,
             retries = retries,
-            retryIf = { (it as? GattResult.Complete)?.response?.status != GATT_SUCCESS }
+            retryIf = { it.status != GATT_SUCCESS }
         ) {
-            gattCallback.events
-                .mapNotNull { it as? GattEvent.CharacteristicRead }
-                .filter { it.characteristic?.uuid == characteristic.uuid }
-                .toGattResult()
-                .shareIn(scope = scope, started = SharingStarted.Eagerly)
+            getGattEvents<CharacteristicRead>()
                 .onSubscription {
                     if (!gatt.readCharacteristic(characteristic)) {
-                        emit(GattResult.RequestFailedToStart)
+                        emit(RequestFailedToStart)
                     }
                 }
+                .filterGattResponse { it.characteristic?.uuid == characteristic.uuid }
                 .first()
         }
     }
@@ -163,12 +161,12 @@ class SimpleBluetoothGatt(
         return mutex.queueGattOperation(
             attemptTimeoutMillis = attemptTimeoutMillis,
             retries = retries,
-            retryIf = { it !is GattResult.Complete }
+            retryIf = { false }
         ) {
             if (gatt.setCharacteristicNotification(characteristic, enable)) {
-                GattResult.Complete(Unit)
+                Complete(Unit)
             } else {
-                GattResult.RequestFailedToStart
+                RequestFailedToStart
             }
         }
     }
@@ -181,8 +179,8 @@ class SimpleBluetoothGatt(
      */
     fun getCharacteristicNotifications(
         characteristic: BluetoothGattCharacteristic
-    ): Flow<GattEvent.CharacteristicChanged> = gattCallback.events
-        .mapNotNull { it as? GattEvent.CharacteristicChanged }
+    ): Flow<CharacteristicChanged> = gattCallback.events
+        .mapNotNull { it as? CharacteristicChanged }
         .filter { it.characteristic.uuid == characteristic.uuid }
 
     /**
@@ -199,18 +197,17 @@ class SimpleBluetoothGatt(
         device: BluetoothDevice,
         retries: Int = DEFAULT_RETRIES,
         attemptTimeoutMillis: Long = DEFAULT_ATTEMPT_TIMEOUT
-    ): GattResult<GattEvent.ConnectionStateChange> {
+    ): GattResult<ConnectionStateChange> {
         return mutex.queueGattOperation(
             attemptTimeoutMillis = attemptTimeoutMillis,
             retries = retries,
-            retryIf = { (it as? GattResult.Complete)?.response?.status != GATT_SUCCESS }
+            retryIf = { it.status != GATT_SUCCESS }
         ) {
-            gattCallback.events
-                .mapNotNull { it as? GattEvent.ConnectionStateChange }
-                .filter { it.newState == STATE_CONNECTED || it.status != GATT_SUCCESS }
-                .toGattResult()
-                .shareIn(scope = scope, started = SharingStarted.Eagerly)
-                .onSubscription { gatt = device.connectGatt(context, false, gattCallback) }
+            getGattEvents<ConnectionStateChange>()
+                .onSubscription {
+                    gatt = device.connectGatt(context, false, gattCallback)
+                }
+                .filterGattResponse { it.isConnected || !it.isSuccess }
                 .first()
         }
     }
@@ -228,12 +225,9 @@ class SimpleBluetoothGatt(
         device: BluetoothDevice
     ) {
         mutex.withLock {
-            gattCallback.events
-                .mapNotNull { it as? GattEvent.ConnectionStateChange }
-                .filter { it.newState == STATE_CONNECTED && it.status == GATT_SUCCESS }
-                .toGattResult()
-                .shareIn(scope = scope, started = SharingStarted.Eagerly)
+            getGattEvents<ConnectionStateChange>()
                 .onSubscription { gatt = device.connectGatt(context, true, gattCallback) }
+                .filterGattResponse { it.isConnected && it.isSuccess }
                 .first()
         }
     }
@@ -245,41 +239,45 @@ class SimpleBluetoothGatt(
     suspend fun disconnect(
         retries: Int = DEFAULT_RETRIES,
         attemptTimeoutMillis: Long = DEFAULT_ATTEMPT_TIMEOUT
-    ): GattResult<GattEvent.ConnectionStateChange> {
+    ): GattResult<ConnectionStateChange> {
         return mutex.queueGattOperation(
             attemptTimeoutMillis = attemptTimeoutMillis,
             retries = retries,
-            retryIf = { (it as? GattResult.Complete)?.response?.status != GATT_SUCCESS }
+            retryIf = { it.status != GATT_SUCCESS }
         ) {
-            gattCallback.events
-                .mapNotNull { it as? GattEvent.ConnectionStateChange }
-                .filter { it.newState == STATE_DISCONNECTED || it.status != GATT_SUCCESS }
-                .toGattResult()
-                .shareIn(scope = scope, started = SharingStarted.Eagerly)
+            getGattEvents<ConnectionStateChange>()
                 .onSubscription { gatt.disconnect() }
+                .filterGattResponse { it.isDisconnected || !it.isSuccess }
                 .first()
         }
     }
 
-    private fun <T : GattEvent> Flow<T>.toGattResult(): Flow<GattResult<T>> =
-        map { GattResult.Complete(it) }
+    private inline fun <reified T : GattEvent> getGattEvents(): SharedFlow<GattResult<T>> =
+        gattCallback.events
+            .mapNotNull { it as? T }
+            .map { Complete(it) }
+            .shareIn(scope = scope, started = SharingStarted.Eagerly)
 }
 
 private suspend fun <T> Mutex.queueGattOperation(
     attemptTimeoutMillis: Long,
     retries: Int,
-    retryIf: (GattResult<T>) -> Boolean,
+    retryIf: (T) -> Boolean,
     operation: suspend () -> GattResult<T>
 ): GattResult<T> = withLock {
     withRetries(
         retries = retries,
-        retryIf = retryIf
+        retryIf = { it !is Complete || retryIf(it.response) }
     ) {
         withTimeoutOrDefault(
             timeoutMillis = attemptTimeoutMillis,
-            default = GattResult.Timeout
+            default = Timeout
         ) {
             operation()
         }
     }
+}
+
+private fun <T> Flow<GattResult<T>>.filterGattResponse(condition: (T) -> Boolean) = filter {
+    it !is Complete || condition(it.response)
 }
