@@ -25,30 +25,24 @@ class SimpleBluetoothGattCallback(dispatcher: CoroutineDispatcher) : BluetoothGa
     val events = _events.asSharedFlow()
 
     override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
-        scope.launch {
-            _events.emit(
-                GattEvent.ConnectionStateChange(
-                    status = status,
-                    newState = newState
-                )
+        onEvent(
+            GattEvent.ConnectionStateChange(
+                status = status,
+                newState = newState
             )
-        }
+        )
     }
 
     override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
-        scope.launch {
-            _events.emit(
-                GattEvent.ServicesDiscovered(status = status)
-            )
-        }
+        onEvent(
+            GattEvent.ServicesDiscovered(status = status)
+        )
     }
 
     override fun onServiceChanged(gatt: BluetoothGatt) {
-        scope.launch {
-            _events.emit(
-                GattEvent.ServiceChanged
-            )
-        }
+        onEvent(
+            GattEvent.ServiceChanged
+        )
     }
 
     override fun onCharacteristicWrite(
@@ -56,14 +50,12 @@ class SimpleBluetoothGattCallback(dispatcher: CoroutineDispatcher) : BluetoothGa
         characteristic: BluetoothGattCharacteristic?,
         status: Int
     ) {
-        scope.launch {
-            _events.emit(
-                GattEvent.CharacteristicWrite(
-                    characteristic = characteristic,
-                    status = status
-                )
+        onEvent(
+            GattEvent.CharacteristicWrite(
+                characteristic = characteristic,
+                status = status
             )
-        }
+        )
     }
 
     override fun onCharacteristicRead(
@@ -71,14 +63,12 @@ class SimpleBluetoothGattCallback(dispatcher: CoroutineDispatcher) : BluetoothGa
         characteristic: BluetoothGattCharacteristic?,
         status: Int
     ) {
-        scope.launch {
-            _events.emit(
-                GattEvent.CharacteristicRead(
-                    characteristic = characteristic,
-                    status =  status
-                )
+        onEvent(
+            GattEvent.CharacteristicRead(
+                characteristic = characteristic,
+                status =  status
             )
-        }
+        )
     }
 
     override fun onCharacteristicChanged(
@@ -86,12 +76,14 @@ class SimpleBluetoothGattCallback(dispatcher: CoroutineDispatcher) : BluetoothGa
         characteristic: BluetoothGattCharacteristic?
     ) {
         if (characteristic == null) return
-        scope.launch {
-            _events.emit(
-                GattEvent.CharacteristicChanged(
-                    characteristic = characteristic
-                )
+        onEvent(
+            GattEvent.CharacteristicChanged(
+                characteristic = characteristic
             )
-        }
+        )
+    }
+
+    private fun onEvent(event: GattEvent) {
+        scope.launch { _events.emit(event) }
     }
 }
