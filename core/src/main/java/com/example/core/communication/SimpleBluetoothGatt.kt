@@ -11,6 +11,7 @@ import com.example.core.communication.GattEvent.CharacteristicChanged
 import com.example.core.communication.GattEvent.CharacteristicRead
 import com.example.core.communication.GattEvent.CharacteristicWrite
 import com.example.core.communication.GattEvent.ConnectionStateChange
+import com.example.core.communication.GattEvent.MtuChanged
 import com.example.core.communication.GattEvent.ServiceChanged
 import com.example.core.communication.GattEvent.ServicesDiscovered
 import com.example.core.communication.GattResult.Complete
@@ -248,6 +249,30 @@ class SimpleBluetoothGatt(
             getGattEvents<ConnectionStateChange>()
                 .onSubscription { gatt.disconnect() }
                 .filterGattResponse { it.isDisconnected || !it.isSuccess }
+                .first()
+        }
+    }
+
+    /**
+     * Request a new MTU with the device.
+     */
+    @RequiresPermission(value = "android.permission.BLUETOOTH_CONNECT")
+    suspend fun requestMtu(
+        mtu: Int,
+        retries: Int = DEFAULT_RETRIES,
+        attemptTimeoutMillis: Long = DEFAULT_ATTEMPT_TIMEOUT
+    ): GattResult<MtuChanged> {
+        return mutex.queueGattOperation(
+            attemptTimeoutMillis,
+            retries,
+            retryIf = { it.status != GATT_SUCCESS }
+        ) {
+            getGattEvents<MtuChanged>()
+                .onSubscription {
+                    if (!gatt.requestMtu(mtu)) {
+                        emit(RequestFailedToStart)
+                    }
+                }
                 .first()
         }
     }

@@ -1,6 +1,9 @@
 package com.example.core.communication
 
 import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGatt.GATT_SUCCESS
+import android.bluetooth.BluetoothGatt.STATE_CONNECTED
+import android.bluetooth.BluetoothGatt.STATE_DISCONNECTED
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothProfile
 
@@ -20,7 +23,11 @@ sealed interface GattEvent {
     data class ConnectionStateChange(
         val status: Int,
         val newState: Int
-    ) : GattEvent
+    ) : GattEvent {
+        val isConnected = newState == STATE_CONNECTED
+        val isDisconnected = newState == STATE_DISCONNECTED
+        val isSuccess = status == GATT_SUCCESS
+    }
 
     /**
      * An event that occurs when a characteristic write attempt was made.
@@ -70,4 +77,6 @@ sealed interface GattEvent {
      * [BluetoothGatt.GATT_SUCCESS] if the request was successful.
      */
     data class ServicesDiscovered(val status: Int) : GattEvent
+
+    data class MtuChanged(val mtu: Int, val status: Int) : GattEvent
 }

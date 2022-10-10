@@ -83,6 +83,12 @@ class SimpleBluetoothGattCallback(dispatcher: CoroutineDispatcher) : BluetoothGa
         )
     }
 
+    override fun onMtuChanged(gatt: BluetoothGatt?, mtu: Int, status: Int) {
+        onEvent(
+            GattEvent.MtuChanged(mtu = mtu, status = status)
+        )
+    }
+
     private fun onEvent(event: GattEvent) {
         scope.launch { _events.emit(event) }
     }

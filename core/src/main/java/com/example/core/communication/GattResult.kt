@@ -44,7 +44,7 @@ val <T> GattResult<T>.hasFailedToStart
 /**
  * Get the response value if this was a [GattResult.Complete], or null otherwise.
  */
-fun <T> GattResult<T>.responseOrNull() = (this as GattResult.Complete).response
+fun <T> GattResult<T>.responseOrNull() = (this as? GattResult.Complete)?.response
 
 /**
  * Run [action] if this was a [GattResult.Complete].
