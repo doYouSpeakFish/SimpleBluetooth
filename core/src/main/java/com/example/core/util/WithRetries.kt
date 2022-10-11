@@ -10,7 +10,7 @@ internal tailrec suspend fun <T> withRetries(
     operation: suspend () -> T
 ): T {
     val result = operation()
-    return if (!retryIf(result)) {
+    return if (retries == 0 || !retryIf(result)) {
         result
     } else {
         withRetries(
