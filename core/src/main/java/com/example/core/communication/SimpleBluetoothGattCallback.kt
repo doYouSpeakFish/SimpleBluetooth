@@ -3,6 +3,7 @@ package com.example.core.communication
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -87,6 +88,38 @@ class SimpleBluetoothGattCallback(dispatcher: CoroutineDispatcher) : BluetoothGa
         onEvent(
             GattEvent.MtuChanged(mtu = mtu, status = status)
         )
+    }
+
+    override fun onDescriptorRead(
+        gatt: BluetoothGatt?,
+        descriptor: BluetoothGattDescriptor?,
+        status: Int
+    ) {
+
+    }
+
+    override fun onDescriptorWrite(
+        gatt: BluetoothGatt?,
+        descriptor: BluetoothGattDescriptor?,
+        status: Int
+    ) {
+
+    }
+
+    override fun onPhyRead(gatt: BluetoothGatt?, txPhy: Int, rxPhy: Int, status: Int) {
+
+    }
+
+    override fun onPhyUpdate(gatt: BluetoothGatt?, txPhy: Int, rxPhy: Int, status: Int) {
+
+    }
+
+    override fun onReadRemoteRssi(gatt: BluetoothGatt?, rssi: Int, status: Int) {
+
+    }
+
+    override fun onReliableWriteCompleted(gatt: BluetoothGatt?, status: Int) {
+
     }
 
     private fun onEvent(event: GattEvent) {

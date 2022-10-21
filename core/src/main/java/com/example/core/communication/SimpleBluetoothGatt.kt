@@ -1,11 +1,17 @@
 package com.example.core.communication
 
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothDevice.ACTION_BOND_STATE_CHANGED
+import android.bluetooth.BluetoothDevice.BOND_BONDING
+import android.bluetooth.BluetoothDevice.BOND_NONE
 import android.bluetooth.BluetoothGatt
-import android.bluetooth.BluetoothGatt.GATT_SUCCESS
+import android.bluetooth.BluetoothGatt.*
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattService
+import android.bluetooth.BluetoothProfile
 import android.content.Context
+import android.content.IntentFilter
+import android.os.Build
 import androidx.annotation.RequiresPermission
 import com.example.core.communication.GattEvent.CharacteristicChanged
 import com.example.core.communication.GattEvent.CharacteristicRead
@@ -26,10 +32,13 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.SharingStarted.Companion.Eagerly
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
@@ -38,6 +47,7 @@ import kotlinx.coroutines.sync.withLock
 
 const val DEFAULT_RETRIES = 5
 const val DEFAULT_ATTEMPT_TIMEOUT = 10_000L
+private const val ANDROID_8 = 26
 
 /**
  * A wrapper around [BluetoothGatt], providing a coroutine interface instead of a callback based
@@ -45,12 +55,36 @@ const val DEFAULT_ATTEMPT_TIMEOUT = 10_000L
  * the [connect] method of this class.
  */
 class SimpleBluetoothGatt(
+    private val context: Context,
     private val gattCallback: SimpleBluetoothGattCallback,
     private val mutex: Mutex,
+    private val bondingStateReceiver: BondingStateReceiver = BondingStateReceiver(),
     dispatcher: CoroutineDispatcher = Dispatchers.Default
 ) {
     private val scope = CoroutineScope(dispatcher + SupervisorJob())
     private lateinit var gatt: BluetoothGatt
+
+    private val bondState = bondingStateReceiver.bondingEvents
+        .filter { it.device.address == gatt.device.address }
+        .map { it.bondState }
+        .stateIn(scope = scope, started = Eagerly, initialValue = BOND_NONE)
+
+    val isConnected = gattCallback.events
+        .mapNotNull { it as? ConnectionStateChange }
+        .map { it.newState == BluetoothProfile.STATE_CONNECTED }
+        .stateIn(scope = scope, started = Eagerly, initialValue = false)
+
+    init {
+        isConnected
+            .onEach { isConnected ->
+                if (isConnected) {
+                    bondingStateReceiver.register()
+                } else {
+                    bondingStateReceiver.unregister()
+                }
+            }
+            .launchIn(scope)
+    }
 
     /**
      * The currently known GATT services available for the connected BLE device. This is updated by
@@ -62,7 +96,7 @@ class SimpleBluetoothGatt(
         .map { gatt.services.filterNotNull() }
         .stateIn(
             scope = scope,
-            started = SharingStarted.Eagerly,
+            started = Eagerly,
             initialValue = emptyList()
         )
 
@@ -277,29 +311,125 @@ class SimpleBluetoothGatt(
         }
     }
 
+    /**
+     * Request a new MTU with the device.
+     */
+    @RequiresPermission(value = "android.permission.BLUETOOTH_CONNECT")
+    suspend fun requestMtu2(
+        mtu: Int,
+        retries: Int = DEFAULT_RETRIES,
+        attemptTimeoutMillis: Long = DEFAULT_ATTEMPT_TIMEOUT
+    ) = MtuRequest(
+        bluetoothStuff = bluetoothStuff,
+        mtu = mtu
+    ).awaitResult(retries, attemptTimeoutMillis)
+
+    private val bluetoothStuff = BluetoothStuff(
+        mutex = mutex,
+        callback = gattCallback,
+        scope = scope,
+        gatt = gatt
+    )
+
+    data class BluetoothStuff(
+        val mutex: Mutex,
+        val callback: SimpleBluetoothGattCallback,
+        val scope: CoroutineScope,
+        val gatt: BluetoothGatt
+    ) {
+        suspend fun awaitNotBonding() {}
+    }
+
+    abstract class GattOperation<T>(
+        protected val bluetoothStuff: BluetoothStuff
+    ) {
+        @RequiresPermission(value = "android.permission.BLUETOOTH_CONNECT")
+        protected abstract suspend fun execute(): GattResult<T>
+        protected abstract fun shouldRetry(result: T): Boolean
+
+        protected inline fun <reified T : GattEvent> getGattEvents(): SharedFlow<GattResult<T>> =
+            bluetoothStuff.callback.events
+                .mapNotNull { it as? T }
+                .map { Complete(it) }
+                .shareIn(scope = bluetoothStuff.scope, started = Eagerly)
+
+        @RequiresPermission(value = "android.permission.BLUETOOTH_CONNECT")
+        tailrec suspend fun awaitResult(maxRetries: Int, attemptTimeoutMillis: Long): GattResult<T> {
+            bluetoothStuff.awaitNotBonding()
+            val result = withTimeoutOrDefault(attemptTimeoutMillis, Timeout, this::execute)
+            val failed = result !is Complete || shouldRetry(result.response)
+            if (!failed || maxRetries <= 0) return result
+            return awaitResult(maxRetries - 1, attemptTimeoutMillis)
+        }
+    }
+
+    class MtuRequest(
+        bluetoothStuff: BluetoothStuff,
+        private val mtu: Int
+    ) : GattOperation<MtuChanged>(bluetoothStuff) {
+
+        @RequiresPermission(value = "android.permission.BLUETOOTH_CONNECT")
+        override suspend fun execute(): GattResult<MtuChanged> {
+            return getGattEvents<MtuChanged>()
+                .onSubscription {
+                    if (!bluetoothStuff.gatt.requestMtu(mtu)) {
+                        emit(RequestFailedToStart)
+                    }
+                }
+                .filter {
+                    if (Build.VERSION.SDK_INT < ANDROID_8) return@filter true
+                    (it as? Complete)?.response?.status != GATT_INSUFFICIENT_AUTHENTICATION
+                }
+                .first()
+        }
+
+        override fun shouldRetry(result: MtuChanged) = result.status != GATT_SUCCESS
+    }
+
     private inline fun <reified T : GattEvent> getGattEvents(): SharedFlow<GattResult<T>> =
         gattCallback.events
             .mapNotNull { it as? T }
+            .filter {
+                if (Build.VERSION.SDK_INT < ANDROID_8) return@filter true
+                if (it !is GattEvent.GattResponse) return@filter true
+                it.status != GATT_INSUFFICIENT_AUTHENTICATION
+            }
             .map { Complete(it) }
-            .shareIn(scope = scope, started = SharingStarted.Eagerly)
-}
+            .shareIn(scope = scope, started = Eagerly)
 
-private suspend fun <T> Mutex.queueGattOperation(
-    attemptTimeoutMillis: Long,
-    retries: Int,
-    retryIf: (T) -> Boolean,
-    operation: suspend () -> GattResult<T>
-): GattResult<T> = withLock {
-    withRetries(
-        retries = retries,
-        retryIf = { it !is Complete || retryIf(it.response) }
-    ) {
-        withTimeoutOrDefault(
-            timeoutMillis = attemptTimeoutMillis,
-            default = Timeout
+    private suspend fun <T> Mutex.queueGattOperation(
+        attemptTimeoutMillis: Long,
+        retries: Int,
+        retryIf: (T) -> Boolean,
+        operation: suspend () -> GattResult<T>
+    ): GattResult<T> = withLock {
+        withRetries(
+            retries = retries,
+            retryIf = { it !is Complete || retryIf(it.response) }
         ) {
-            operation()
+            awaitNotBonding()
+            withTimeoutOrDefault(
+                timeoutMillis = attemptTimeoutMillis,
+                default = Timeout
+            ) {
+                operation()
+            }
         }
+    }
+
+    private suspend fun awaitNotBonding() {
+        bondState.first { it != BOND_BONDING }
+    }
+
+    private fun BondingStateReceiver.register() {
+        context.registerReceiver(
+            this,
+            IntentFilter(ACTION_BOND_STATE_CHANGED)
+        )
+    }
+
+    private fun BondingStateReceiver.unregister() {
+        context.unregisterReceiver(this)
     }
 }
 

@@ -11,6 +11,9 @@ import android.bluetooth.BluetoothProfile
  * A GATT callback event.
  */
 sealed interface GattEvent {
+    sealed interface GattResponse : GattEvent {
+        val status: Int
+    }
     /**
      * A connection state changed event.
      *
@@ -21,9 +24,9 @@ sealed interface GattEvent {
      * [BluetoothProfile.STATE_DISCONNECTED].
      */
     data class ConnectionStateChange(
-        val status: Int,
+        override val status: Int,
         val newState: Int
-    ) : GattEvent {
+    ) : GattResponse {
         val isConnected = newState == STATE_CONNECTED
         val isDisconnected = newState == STATE_DISCONNECTED
         val isSuccess = status == GATT_SUCCESS
@@ -39,8 +42,8 @@ sealed interface GattEvent {
      */
     data class CharacteristicWrite(
         val characteristic: BluetoothGattCharacteristic?,
-        val status: Int
-    ) : GattEvent
+        override val status: Int
+    ) : GattResponse
 
     /**
      * An event that occurs when a characteristic read attempt was made.
@@ -52,8 +55,8 @@ sealed interface GattEvent {
      */
     data class CharacteristicRead(
         val characteristic: BluetoothGattCharacteristic?,
-        val status: Int
-    ) : GattEvent
+        override val status: Int
+    ) : GattResponse
 
     /**
      * A notification event when a characteristic changes.
@@ -76,7 +79,7 @@ sealed interface GattEvent {
      * @param status The result of a call to discover services.
      * [BluetoothGatt.GATT_SUCCESS] if the request was successful.
      */
-    data class ServicesDiscovered(val status: Int) : GattEvent
+    data class ServicesDiscovered(override val status: Int) : GattResponse
 
-    data class MtuChanged(val mtu: Int, val status: Int) : GattEvent
+    data class MtuChanged(val mtu: Int, override val status: Int) : GattResponse
 }
